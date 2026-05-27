@@ -1,10 +1,30 @@
 import uiautomator2 as u2
 import time
+import subprocess
 
 DEVICE_ID = "ZF525J6NKX"
 KWAI_PACKAGE = "com.kwai.video"
 
-d = u2.connect(DEVICE_ID)
+d = None
+
+
+def conectar_dispositivo(retries=3, delay=5):
+    global d
+    for attempt in range(1, retries + 1):
+        result = subprocess.run(["adb", "devices"], capture_output=True, text=True)
+        if DEVICE_ID in result.stdout and "offline" not in result.stdout:
+            print(f"Dispositivo {DEVICE_ID} detectado. Conectando...")
+            d = u2.connect(DEVICE_ID)
+            print("Conectado com sucesso.")
+            return
+        print(f"[{attempt}/{retries}] Dispositivo {DEVICE_ID} não encontrado. Aguardando {delay}s...")
+        print("Dispositivos ADB disponíveis:")
+        print(result.stdout.strip() or "  (nenhum)")
+        time.sleep(delay)
+    raise RuntimeError(
+        f"Dispositivo {DEVICE_ID} não está online após {retries} tentativas.\n"
+        "Verifique: cabo USB conectado, Depuração USB ativada e autorização RSA aceita no celular."
+    )
 
 
 def abrir_kwai():
@@ -130,38 +150,123 @@ def clicar_menu_tres_pontos():
 def clicar_ganhar_dinheiro():
     """Clica no ícone ou botão 'Ganhar dinheiro'."""
     print("Tentando clicar em 'Ganhar dinheiro'...")
-    selectors = [
-        {'text': 'Ganhar dinheiro'},
-        {'description': 'Ganhar dinheiro'},
-        {'text': 'Ganhar dinheiro!'},
-        {'text': 'ganhar dinheiro'},
-        {'description': 'ganhar dinheiro'},
+    patterns = [
+        'Ganhar dinheiro',
+        'Ganhe dinheiro',
+        'Ganhar',
+        'Ganha dinheiro',
+        'Kwai gold',
+        'Kwai golds',
     ]
 
-    for sel in selectors:
-        elem = d(**sel)
-        if elem.exists:
-            print(f"Encontrado botão 'Ganhar dinheiro' via {sel}")
+    def buscar_e_clicar():
+        for pattern in patterns:
+            print(f"Buscando elemento com texto/descrição contendo '{pattern}'...")
+            for query in [
+                {'text': pattern},
+                {'textContains': pattern},
+                {'description': pattern},
+                {'descriptionContains': pattern},
+            ]:
+                elem = d(**query)
+                if elem.exists:
+                    print(f"Encontrado elemento por {query}")
+                    _clicar_elemento(elem)
+                    return True
+
+        if hasattr(d, 'xpath'):
+            print("Tentando busca XPath por 'Ganhar'.")
+            xpath = "//*[contains(@text, 'Ganhar') or contains(@content-desc, 'Ganhar') or contains(@text, 'ganhar') or contains(@content-desc, 'ganhar')]"
+            elems = d.xpath(xpath)
+            if elems.exists:
+                for elem in elems:
+                    print("Encontrado elemento via XPath com 'Ganhar'")
+                    _clicar_elemento(elem)
+                    return True
+        return False
+
+    if buscar_e_clicar():
+        return
+
+    print("Não encontrou sem scroll. Rolando a tela para baixo e tentando novamente...")
+    for attempt in range(1, 5):
+        scroll_down(retries=1)
+        print(f"Pesquisa após scroll {attempt}/4")
+        if buscar_e_clicar():
+            return
+
+    raise RuntimeError("Não foi possível clicar no ícone 'Ganhar dinheiro' após scroll")
+
+
+def _clicar_elemento(elem):
+    try:
+        if not elem.exists:
+            raise RuntimeError("Elemento não existe no momento do clique")
+
+        print(f"Clicando no elemento: {elem}")
+        try:
             elem.click()
             time.sleep(4)
             return
+        except Exception as exc_click:
+            print(f"Clique direto falhou: {exc_click}")
 
-    print("Não encontrou o botão 'Ganhar dinheiro' por selector. Tentando fallback de posição.")
-    width, height = d.window_size()
-    fallback_x = int(width * 0.55)
-    fallback_y = int(height * 0.45)
+        info = elem.info
+        bounds = info.get('bounds') or info.get('visibleBounds') or info.get('boundsInParent')
+        if bounds and all(k in bounds for k in ('left', 'top', 'right', 'bottom')):
+            x = (bounds['left'] + bounds['right']) // 2
+            y = (bounds['top'] + bounds['bottom']) // 2
+            print(f"Tentando clique por coordenadas {x},{y}...")
+            d.click(x, y)
+            time.sleep(4)
+            return
 
-    try:
-        d.click(fallback_x, fallback_y)
-        time.sleep(4)
-        print("Clique de fallback em 'Ganhar dinheiro' executado.")
+        raise RuntimeError("Não foi possível clicar no elemento e não há bounds válidos para fallback")
     except Exception as exc:
-        print(f"Falha ao clicar em 'Ganhar dinheiro': {exc}")
-        raise RuntimeError("Não foi possível clicar no ícone 'Ganhar dinheiro'")
+        print(f"Erro ao clicar no elemento: {exc}")
+        raise
+
+
+def scroll_down(retries=5):
+    width, height = d.window_size()
+    x = int(width * 0.5)
+    start_y = int(height * 0.75)
+    end_y = int(height * 0.35)
+    for _ in range(retries):
+        d.swipe(x, start_y, x, end_y, duration=0.4)
+        time.sleep(1)
+
+
+def clicar_assista_videos():
+    """Rola a tela e clica no card 'Asista a vídeos para ganhar X kwai golds'."""
+    print("Procurando o card 'Asista a vídeos para ganhar X kwai golds'...")
+    patterns = [
+        'Asista a vídeos para ganhar',
+        'Asista a vídeo para ganhar',
+        'kwai golds',
+        'kwai gold',
+        'ganhar',
+    ]
+
+    for attempt in range(6):
+        for pattern in patterns:
+            elem = d(textContains=pattern)
+            if elem.exists:
+                print(f"Encontrado elemento com texto '{pattern}'")
+                elem.click()
+                time.sleep(4)
+                return
+
+        print(f"Não encontrado ainda. Rolando a tela ({attempt + 1}/6)...")
+        scroll_down(retries=1)
+
+    raise RuntimeError("Não foi possível encontrar o card 'Asista a vídeos para ganhar X kwai golds'")
 
 
 if __name__ == "__main__":
+    conectar_dispositivo()
     abrir_kwai()
     entrar_perfil()
     clicar_menu_tres_pontos()
     clicar_ganhar_dinheiro()
+    clicar_assista_videos()
