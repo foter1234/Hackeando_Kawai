@@ -12,8 +12,10 @@ Automação Python para mineração de Kwai Gold via ADB no Android real.
 ## Instalação
 
 ```bash
+python3 -m venv venv
+source venv/bin/activate
 pip install uiautomator2
-python -m uiautomator2 init
+python3 -m uiautomator2 init
 ```
 
 ## Como usar
@@ -24,9 +26,10 @@ python -m uiautomator2 init
    adb devices
    ```
 3. Copie o ID do dispositivo e cole em `DEVICE_ID` no `main.py`
-4. Execute:
+4. Ative o venv e execute:
    ```bash
-   python main.py
+   source venv/bin/activate
+   python3 main.py
    ```
 
 ## Como funciona

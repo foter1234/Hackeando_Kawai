@@ -23,7 +23,7 @@ def assistir_videos(quantidade=50):
         time.sleep(tempo)
 
         # Swipe para o próximo vídeo
-        d.swipe(540, 1400, 540, 400, duration=0.3)
+        swipe_next()
         time.sleep(random.uniform(1, 2))
 
     print("Sessão finalizada.")
@@ -36,6 +36,26 @@ def curtir_video():
         time.sleep(1)
     except Exception:
         pass
+
+
+def swipe_next(retries=3):
+    """Garante que a tela role para o próximo vídeo."""
+    for attempt in range(1, retries + 1):
+        try:
+            d.swipe(540, 1400, 540, 400, duration=0.3)
+            time.sleep(0.5)
+            return
+        except Exception as exc:
+            print(f"Swipe falhou (tentativa {attempt}/{retries}): {exc}")
+            try:
+                d.shell("input swipe 540 1400 540 400 100")
+                time.sleep(0.5)
+                return
+            except Exception as exc2:
+                print(f"Fallback swipe falhou: {exc2}")
+                time.sleep(1)
+
+    raise RuntimeError("Não foi possível rolar para o próximo vídeo")
 
 
 def assistir_e_curtir(quantidade=50, curtir_a_cada=5):
@@ -53,7 +73,7 @@ def assistir_e_curtir(quantidade=50, curtir_a_cada=5):
             print("  ❤ curtido")
 
         time.sleep(tempo)
-        d.swipe(540, 1400, 540, 400, duration=0.3)
+        swipe_next()
         time.sleep(random.uniform(1, 3))
 
     print("Sessão finalizada.")
