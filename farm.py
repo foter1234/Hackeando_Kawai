@@ -275,9 +275,82 @@ def scroll_down(retries=5):
         time.sleep(1)
 
 
+def _log_todos_elementos():
+    """Imprime todos os elementos visíveis na tela para debug."""
+    try:
+        xml = d.dump_hierarchy()
+        root = ET.fromstring(xml)
+
+        print("\n" + "="*60)
+        print("🔍 DUMP DE TODOS OS ELEMENTOS NA TELA:")
+        print("="*60)
+
+        elementos_encontrados = []
+        for i, node in enumerate(root.iter()):
+            text = node.attrib.get('text', '').strip()
+            desc = node.attrib.get('content-desc', '').strip()
+            resource_id = node.attrib.get('resource-id', '').strip()
+
+            if text or desc:
+                elementos_encontrados.append({
+                    'index': i,
+                    'text': text,
+                    'description': desc,
+                    'resource-id': resource_id
+                })
+
+        # Imprime todos os elementos encontrados
+        for elem in elementos_encontrados:
+            linha = f"[{elem['index']}]"
+            if elem['text']:
+                linha += f" TEXT: '{elem['text']}'"
+            if elem['description']:
+                linha += f" DESC: '{elem['description']}'"
+            if elem['resource-id']:
+                linha += f" RID: '{elem['resource-id']}'"
+            print(linha)
+
+        print("="*60)
+        print(f"Total de {len(elementos_encontrados)} elementos encontrados\n")
+
+    except Exception as e:
+        print(f"Erro ao fazer dump de elementos: {e}")
+
+
 def clicar_assista_videos():
     """Rola a tela e clica no card de recompensa de vídeos com botão 'Ir'."""
+    # Aguarda a tela carregar completamente
+    time.sleep(3)
+
+    # Log de debug: mostra todos os elementos
+    _log_todos_elementos()
+
     print("Procurando o card 'Assistir vídeos para ganhar até ...'...")
+
+    # Log de debug: elementos relevantes
+    try:
+        xml = d.dump_hierarchy()
+        root = ET.fromstring(xml)
+
+        print("\n" + "="*60)
+        print("🔍 ELEMENTOS RELEVANTES (contém vídeo/ganhar):")
+        print("="*60)
+
+        palavras_chave = ['video', 'ganhar', 'assistir', 'card', 'recompensa', 'ir']
+        for node in root.iter():
+            text = (node.attrib.get('text', '') or '').lower()
+            desc = (node.attrib.get('content-desc', '') or '').lower()
+
+            if any(palavra in text or palavra in desc for palavra in palavras_chave):
+                text_completo = node.attrib.get('text', '').strip()
+                desc_completo = node.attrib.get('content-desc', '').strip()
+                print(f"  TEXT: '{text_completo}' | DESC: '{desc_completo}'")
+
+        print("="*60 + "\n")
+
+    except Exception as e:
+        print(f"Erro ao fazer dump relevante: {e}\n")
+
     patterns = [
         r'(?i).*assistir v[ií]deos para ganhar.*até.*',
         r'(?i).*assistir v[ií]deos para ganhar.*',
@@ -301,6 +374,31 @@ def clicar_assista_videos():
 
         print(f"Card não encontrado. Rolando a tela ({attempt + 1}/6)...")
         scroll_down(retries=1)
+
+        # Log de debug após scroll
+        try:
+            xml = d.dump_hierarchy()
+            root = ET.fromstring(xml)
+
+            print(f"\n  [Após scroll {attempt + 1}] Elementos relevantes atuais:")
+            palavras_chave = ['video', 'ganhar', 'assistir', 'card', 'recompensa', 'ir']
+            count = 0
+            for node in root.iter():
+                text = (node.attrib.get('text', '') or '').lower()
+                desc = (node.attrib.get('content-desc', '') or '').lower()
+
+                if any(palavra in text or palavra in desc for palavra in palavras_chave):
+                    text_completo = node.attrib.get('text', '').strip()
+                    desc_completo = node.attrib.get('content-desc', '').strip()
+                    if text_completo or desc_completo:
+                        print(f"    TEXT: '{text_completo}' | DESC: '{desc_completo}'")
+                        count += 1
+
+            if count == 0:
+                print(f"    (nenhum elemento relevante encontrado)")
+
+        except Exception as e:
+            print(f"  Erro ao fazer log após scroll: {e}")
 
     raise RuntimeError("Não foi possível encontrar o card 'Assista a vídeos para ganhar...' após scroll")
 
@@ -368,34 +466,243 @@ def _clicar_ir_relacionado(card_elem):
 
 
 def aguardar_e_fechar_video(max_espera_por_video=120):
-    """Loop: espera timer zerar → clica 'Ganhar mais' → repete."""
+    """Loop infinito: timer zerar → respiro 2s → encerrar vídeo → clicar 'Ganhar mais' → procurar próximo card → repete.
+       Se ad sem timer, fecha e procura próximo card."""
     videos_assistidos = 0
 
     while True:
-        print(f"Aguardando fim do timer do vídeo {videos_assistidos + 1}...")
+        videos_assistidos += 1
+        print(f"\n{'='*60}")
+        print(f"Aguardando fim do timer do vídeo {videos_assistidos}...")
+        print(f"{'='*60}")
 
         # Passo 1: aguarda o timer chegar a 0
-        if not _aguardar_timer_acabar(max_espera_por_video):
-            print("Timer não terminou no tempo esperado. Parando.")
-            return
+        timer_resultado = _aguardar_timer_acabar(max_espera_por_video)
 
-        videos_assistidos += 1
-        print(f"Vídeo #{videos_assistidos} finalizado!")
+        if timer_resultado is None:
+            # AD foi detectado e fechado - procura próximo card
+            print("\n" + "="*60)
+            print("Procurando próximo card de vídeos (após fechar AD)...")
+            print("="*60)
+            try:
+                clicar_assista_videos()
+                print("✅ Próximo card encontrado após fechar AD!")
+            except RuntimeError as e:
+                print(f"⚠️  Não conseguiu encontrar o card: {e}")
+                print("Tentando novamente em 3s...")
+                time.sleep(3)
+                try:
+                    clicar_assista_videos()
+                    print("✅ Segunda tentativa bem-sucedida!")
+                except RuntimeError:
+                    print("❌ Falha crítica. Tentando de novo em 5s...")
+                    time.sleep(5)
+                    continue
+            continue
+
+        if timer_resultado is False:
+            # Ad sem timer detectável - encerra e procura próximo
+            print("⚠️  Ad sem timer detectável. Encerrando e procurando próximo vídeo...")
+            _encerrar_video(timeout=2)
+            time.sleep(2)
+
+            print(f"\n{'='*60}")
+            print("Procurando próximo card de vídeos (após ad invisível)...")
+            print(f"{'='*60}")
+            try:
+                clicar_assista_videos()
+                print("✅ Próximo card encontrado e clicado!")
+            except RuntimeError as e:
+                print(f"⚠️  Não conseguiu encontrar o card: {e}")
+                print("Tentando novamente em 3s...")
+                time.sleep(3)
+                try:
+                    clicar_assista_videos()
+                    print("✅ Segunda tentativa bem-sucedida!")
+                except RuntimeError:
+                    print("❌ Falha ao procurar o card após ad invisível. Tentando de novo em 5s...")
+                    time.sleep(5)
+                    continue
+            continue
+
+        print(f"✅ Vídeo #{videos_assistidos} finalizado!")
+
+        # Passo 2: respiro de 2 segundos apenas
+        print("Aguardando 2 segundos...")
         time.sleep(2)
 
-        # Passo 2: verifica se apareceu "Ganhar mais"
-        if _clicar_ganhar_mais():
-            print("Clicou em 'Ganhar mais'. Próximo vídeo em breve...")
+        # Passo 3: tenta encerrar o vídeo IMEDIATAMENTE
+        print("Encerrando vídeo agora...")
+        _encerrar_video(timeout=2)
+
+        # Passo 4: procura por "Ganhar mais" e clica
+        if _procurar_clicar_ganhar_mais_com_retry():
+            print(f"✅ 'Ganhar mais' clicado! Aguardando transição...")
             time.sleep(4)
+
+            # Passo 5: procura pelo próximo card de vídeos
+            print(f"\n{'='*60}")
+            print("Procurando próximo card de vídeos...")
+            print(f"{'='*60}")
+            try:
+                clicar_assista_videos()
+                print("✅ Próximo card encontrado e clicado!")
+            except RuntimeError as e:
+                print(f"⚠️  Não conseguiu encontrar o card: {e}")
+                print("Tentando novamente em 3s...")
+                time.sleep(3)
+                try:
+                    clicar_assista_videos()
+                    print("✅ Segunda tentativa bem-sucedida!")
+                except RuntimeError:
+                    print("❌ Falha ao procurar o card duas vezes. Tentando de novo em 5s...")
+                    time.sleep(5)
+                    continue
         else:
-            print("'Ganhar mais' não apareceu. Parando de assistir vídeos.")
-            return
+            print("⚠️  Não conseguiu processar a tela (sem 'Ganhar mais'). Tentando procurar o card novamente...")
+            time.sleep(3)
+            try:
+                clicar_assista_videos()
+                print("✅ Card encontrado mesmo sem 'Ganhar mais'!")
+            except RuntimeError as e:
+                print(f"❌ Falha crítica: {e}. Tentando de novo em 5s...")
+                time.sleep(5)
+                continue
+
+
+def _log_tela_video(label=""):
+    """Faz dump de todos os elementos visíveis durante o vídeo para debug."""
+    try:
+        xml = d.dump_hierarchy()
+        root = ET.fromstring(xml)
+
+        if label:
+            print(f"\n🎬 {label}")
+        print("="*60)
+        print("ELEMENTOS NA TELA DO VÍDEO:")
+        print("="*60)
+
+        elementos = []
+        for node in root.iter():
+            text = node.attrib.get('text', '').strip()
+            desc = node.attrib.get('content-desc', '').strip()
+
+            if text or desc:
+                elementos.append((text, desc))
+
+        # Remove duplicatas mantendo ordem
+        elementos_unicos = []
+        vistos = set()
+        for text, desc in elementos:
+            chave = (text, desc)
+            if chave not in vistos:
+                vistos.add(chave)
+                elementos_unicos.append((text, desc))
+
+        for text, desc in elementos_unicos[:30]:  # Limita a 30 elementos
+            if text:
+                print(f"  TEXT: '{text}'")
+            if desc:
+                print(f"  DESC: '{desc}'")
+
+        if len(elementos_unicos) > 30:
+            print(f"  ... e mais {len(elementos_unicos) - 30} elementos")
+
+        print("="*60 + "\n")
+
+    except Exception as e:
+        print(f"Erro ao fazer log da tela: {e}\n")
+
+
+def _detectar_e_fechar_ad():
+    """Detecta se é um ad e tenta fechá-lo (clicando na flechinha ou botão Sair)."""
+    try:
+        xml = d.dump_hierarchy()
+        root = ET.fromstring(xml)
+
+        # Procura por texto "AD" na tela
+        eh_ad = False
+        for node in root.iter():
+            text = node.attrib.get('text', '').strip()
+            if text.upper() == 'AD':
+                eh_ad = True
+                print("🎬 Detectado AD! Tentando fechar...")
+                _log_tela_video("AD DETECTADO")
+                break
+
+        if not eh_ad:
+            return False
+
+        # Tenta clicar na flechinha de voltar (geralmente ao lado de "AD")
+        print("Tentando clicar na flechinha de voltar do AD...")
+        # Procura por botões com ícone de voltar próximos
+        for sel in [
+            {'description': 'voltar'},
+            {'description': 'back'},
+            {'descriptionMatches': r'(?i).*volta.*'},
+            {'descriptionMatches': r'(?i).*back.*'},
+        ]:
+            elem = d(**sel)
+            if elem.exists:
+                try:
+                    _clicar_elemento(elem)
+                    print("✅ Flechinha de voltar clicada!")
+                    time.sleep(2)
+                    return True
+                except Exception as e:
+                    print(f"Erro ao clicar na flechinha: {e}")
+
+        # Se não conseguiu clicar na flechinha, pressiona voltar do sistema
+        print("Flechinha não encontrada. Pressionando voltar do sistema...")
+        subprocess.run(["adb", "-s", DEVICE_ID, "shell", "input", "keyevent", "4"], check=True)
+        time.sleep(2)
+
+        # Procura por botão "Sair" que aparece após pressionar voltar
+        print("Procurando por botão 'Sair'...")
+        for tentativa in range(4):
+            for sel in [
+                {'text': 'Sair'},
+                {'textMatches': r'(?i).*sair.*'},
+                {'descriptionContains': 'Sair'},
+            ]:
+                elem = d(**sel)
+                if elem.exists:
+                    print("✅ Botão 'Sair' encontrado! Clicando...")
+                    try:
+                        _clicar_elemento(elem)
+                        print("✅ AD fechado com sucesso!")
+                        _log_tela_video("AD FECHADO")
+                        return True
+                    except Exception as e:
+                        print(f"Erro ao clicar em Sair: {e}")
+                        return False
+
+            if tentativa < 3:
+                print(f"  'Sair' não encontrado. Tentando novamente... ({tentativa + 1}/4)")
+                time.sleep(1)
+
+        print("❌ Não conseguiu fechar o AD")
+        _log_tela_video("FALHA AO FECHAR AD")
+        return False
+
+    except Exception as e:
+        print(f"Erro ao detectar/fechar AD: {e}")
+        return False
 
 
 def _aguardar_timer_acabar(max_espera):
-    """Lê o timer do vídeo (formato: '15s Seja recompensado após') e aguarda até zerar."""
+    """Lê o timer do vídeo em dois formatos:
+       1. Padrão: '15s Seja recompensado após'
+       2. Com KWAI golds: '15 segundos | 150 Kwai golds a receber/...'
+
+       Se passar 25s sem detectar timer = é um ad sem timer visível.
+       Nesse caso, retorna False para sair e tentar novamente."""
     inicio = time.time()
     ultimo_timer = None
+    detectou_kwai_golds = False
+    primeira_iteracao = True
+    tempo_sem_timer = 0
+    TIMEOUT_SEM_TIMER = 25  # 25 segundos sem timer = ad invisível
 
     while time.time() - inicio < max_espera:
         try:
@@ -403,27 +710,75 @@ def _aguardar_timer_acabar(max_espera):
             root = ET.fromstring(xml)
 
             timer_agora = None
-            # Procura por padrão: "15s Seja recompensado após"
+
+            # Padrão 1: "15s Seja recompensado após"
             for node in root.iter():
                 text = node.attrib.get('text', '').strip()
                 match = re.search(r'(\d+)s\s+Seja recompensado', text)
                 if match:
                     timer_agora = int(match.group(1))
+                    detectou_kwai_golds = False
                     break
 
+            # Padrão 2: "15 segundos | 150 Kwai golds a receber/..." (com variações)
+            if timer_agora is None:
+                for node in root.iter():
+                    text = node.attrib.get('text', '').strip()
+                    # Procura por: "15 segundos" seguido de "|" e "Kwai golds"
+                    match = re.search(r'(\d+)\s+segundos\s*\|\s*\d+\s+kwai\s+golds', text, re.IGNORECASE)
+                    if match:
+                        timer_agora = int(match.group(1))
+                        detectou_kwai_golds = True
+                        break
+
+            # Padrão 3: "7s | Ganhe 198 Kwai Golds" (ad com timer curto)
+            if timer_agora is None:
+                for node in root.iter():
+                    text = node.attrib.get('text', '').strip()
+                    # Procura por: "7s | Ganhe XXX Kwai Golds"
+                    match = re.search(r'(\d+)s\s*\|\s*Ganhe\s+\d+\s+kwai\s+golds', text, re.IGNORECASE)
+                    if match:
+                        timer_agora = int(match.group(1))
+                        detectou_kwai_golds = True
+                        break
+
+            # Log inicial mostrando a tela do vídeo
+            if primeira_iteracao and timer_agora is not None:
+                _log_tela_video("PRIMEIRA DETECÇÃO DO VÍDEO")
+                primeira_iteracao = False
+                tempo_sem_timer = 0
+
             if timer_agora is not None:
+                tempo_sem_timer = 0  # Reseta contador quando encontra timer
                 if ultimo_timer != timer_agora:
-                    print(f"⏱️  Timer: {timer_agora}s")
+                    tipo = "(KWAI golds)" if detectou_kwai_golds else "(padrão)"
+                    print(f"⏱️  Timer: {timer_agora}s {tipo}")
                     ultimo_timer = timer_agora
 
                 if timer_agora == 0:
                     print("⏱️  Timer zerou! Vídeo acabou.")
+                    _log_tela_video("APÓS TIMER ZERAR")
                     return True
             else:
-                # Timer desapareceu - significa que acabou
+                # Timer não encontrado
                 if ultimo_timer is not None:
+                    # Timer desapareceu - significa que acabou
                     print("⏱️  Timer desapareceu - Vídeo finalizado!")
+                    _log_tela_video("TIMER DESAPARECEU")
                     return True
+                else:
+                    # Ainda não encontrou timer uma única vez
+                    tempo_sem_timer = time.time() - inicio
+                    if tempo_sem_timer >= TIMEOUT_SEM_TIMER:
+                        print(f"⚠️  Passou {TIMEOUT_SEM_TIMER}s sem detectar timer")
+                        # Tenta fechar como AD
+                        if _detectar_e_fechar_ad():
+                            print("✅ AD detectado e fechado! Voltando ao loop...")
+                            return None  # Sinal para tentar procurar novo card
+                        else:
+                            print("Encerrando este vídeo e tentando o próximo...")
+                            _log_tela_video("AD SEM TIMER - ENCERRANDO")
+                            return False
 
         except Exception as e:
             print(f"Erro ao ler timer: {e}")
@@ -431,6 +786,37 @@ def _aguardar_timer_acabar(max_espera):
         time.sleep(2)
 
     print(f"Timeout de {max_espera}s aguardando timer")
+    return False
+
+
+def _encerrar_video(timeout=2):
+    """Encerra o vídeo imediatamente pressionando voltar uma única vez."""
+    try:
+        print("Pressionando voltar para encerrar vídeo...")
+        _log_tela_video("ANTES DE ENCERRAR")
+
+        # Pressiona voltar uma única vez (keyevent 4 = BACK)
+        subprocess.run(["adb", "-s", DEVICE_ID, "shell", "input", "keyevent", "4"], check=True)
+        print("✅ Voltar pressionado")
+        time.sleep(1)
+
+        _log_tela_video("APÓS ENCERRAR")
+        return True
+    except Exception as e:
+        print(f"❌ Erro ao encerrar vídeo: {e}")
+        _log_tela_video("ERRO AO ENCERRAR")
+        return False
+
+
+def _procurar_clicar_ganhar_mais_com_retry(timeout=6):
+    """Procura por 'Ganhar mais' ou 'Sair' e clica em 'Ganhar mais'. Tenta continuamente."""
+    print("Procurando por 'Ganhar mais'...")
+
+    # Primeira tentativa: procura por até 6s
+    if _procurar_e_clicar_ganhar_mais(timeout):
+        return True
+
+    print(f"'Ganhar mais' não encontrado após {timeout}s")
     return False
 
 
@@ -457,24 +843,67 @@ def _clicar_ganhar_mais(timeout=20):
 
 
 def _procurar_e_clicar_ganhar_mais(timeout):
-    """Procura e clica em 'Ganhar mais' dentro do timeout especificado."""
+    """Procura por 'Ganhar mais' E 'Sair' juntos (modal), e clica APENAS em 'Ganhar mais' quando ambos estão visíveis."""
     inicio = time.time()
+    primeira_iteracao = True
+
     while time.time() - inicio < timeout:
-        for sel in [{'text': 'Ganhar mais'}, {'descriptionContains': 'Ganhar mais'}, {'textContains': 'Ganhar mais'}]:
+        # Log inicial mostrando a tela
+        if primeira_iteracao:
+            _log_tela_video("PROCURANDO POR 'GANHAR MAIS'")
+            primeira_iteracao = False
+
+        # Verifica se AMBOS "Ganhar mais" E "Sair" estão visíveis (indicando a tela modal correta)
+        ganhar_mais_elem = None
+        sair_elem = None
+
+        for sel in [
+            {'text': 'Ganhar mais'},
+            {'textMatches': r'(?i).*ganhar mais.*'},
+            {'descriptionContains': 'Ganhar mais'},
+            {'textContains': 'Ganhar mais'},
+        ]:
             elem = d(**sel)
             if elem.exists:
-                print("'Ganhar mais' encontrado! Tocando via adb...")
-                try:
-                    info = elem.info
-                    bounds = info.get('bounds') or info.get('visibleBounds', {})
+                ganhar_mais_elem = elem
+                break
+
+        for sel in [
+            {'text': 'Sair'},
+            {'textMatches': r'(?i).*sair.*'},
+            {'descriptionContains': 'Sair'},
+            {'textContains': 'Sair'},
+        ]:
+            elem = d(**sel)
+            if elem.exists:
+                sair_elem = elem
+                break
+
+        # Se AMBOS foram encontrados, clica em "Ganhar mais"
+        if ganhar_mais_elem and sair_elem:
+            print("✅ 'Ganhar mais' E 'Sair' encontrados juntos! Modal confirmada. Clicando em 'Ganhar mais'...")
+            try:
+                info = ganhar_mais_elem.info
+                bounds = info.get('bounds') or info.get('visibleBounds', {})
+                if bounds and all(k in bounds for k in ('left', 'top', 'right', 'bottom')):
                     x = (bounds['left'] + bounds['right']) // 2
                     y = (bounds['top'] + bounds['bottom']) // 2
                     subprocess.run(["adb", "-s", DEVICE_ID, "shell", "input", "tap", str(x), str(y)], check=True)
+                    time.sleep(2)
                     return True
-                except Exception as e:
-                    print(f"Erro ao tocar 'Ganhar mais': {e}")
-                    return False
-        time.sleep(1)
+            except Exception as e:
+                print(f"❌ Erro ao tocar 'Ganhar mais': {e}")
+                _log_tela_video("ERRO AO CLICAR EM 'GANHAR MAIS'")
+                return False
+        elif ganhar_mais_elem and not sair_elem:
+            print("⚠️  Encontrado 'Ganhar mais' mas SEM 'Sair' (pode ser 'Ganhar agora' da tela anterior). Ignorando...")
+        elif sair_elem and not ganhar_mais_elem:
+            print("⚠️  Encontrado 'Sair' mas SEM 'Ganhar mais'. Aguardando modal completa...")
+
+        time.sleep(5)
+
+    print(f"❌ Timeout de {timeout}s: não foi encontrada a tela modal com 'Ganhar mais' e 'Sair' juntos")
+    _log_tela_video("TIMEOUT - NÃO ENCONTROU 'GANHAR MAIS' COM 'SAIR'")
     return False
 
 
@@ -484,5 +913,25 @@ if __name__ == "__main__":
     entrar_perfil()
     clicar_menu_tres_pontos()
     clicar_ganhar_dinheiro()
-    clicar_assista_videos()
+
+    # Tenta encontrar o card com retry
+    max_tentativas = 3
+    for tentativa in range(1, max_tentativas + 1):
+        try:
+            print(f"\n{'='*60}")
+            print(f"Tentativa {tentativa}/{max_tentativas} de encontrar o card...")
+            print(f"{'='*60}")
+            clicar_assista_videos()
+            print("✅ Card encontrado com sucesso!")
+            break
+        except RuntimeError as e:
+            if tentativa < max_tentativas:
+                print(f"❌ Falha na tentativa {tentativa}: {e}")
+                print(f"Aguardando 3s antes de tentar novamente...")
+                time.sleep(3)
+            else:
+                print(f"❌ Falha em todas as {max_tentativas} tentativas. Encerrando.")
+                raise
+
+    # Inicia o loop de assistir vídeos
     aguardar_e_fechar_video()
