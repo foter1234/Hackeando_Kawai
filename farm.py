@@ -1,6 +1,8 @@
 import uiautomator2 as u2
 import time
 import subprocess
+import xml.etree.ElementTree as ET
+import re
 
 DEVICE_ID = "ZF525J6NKX"
 KWAI_PACKAGE = "com.kwai.video"
@@ -151,36 +153,25 @@ def clicar_ganhar_dinheiro():
     """Clica no ícone ou botão 'Ganhar dinheiro'."""
     print("Tentando clicar em 'Ganhar dinheiro'...")
     patterns = [
-        'Ganhar dinheiro',
-        'Ganhe dinheiro',
-        'Ganhar',
-        'Ganha dinheiro',
-        'Kwai gold',
-        'Kwai golds',
+        r'(?i).*ganhar dinheiro.*',
+        r'(?i).*ganhe dinheiro.*',
+        r'(?i).*ganhar.*dinheiro.*',
+        r'(?i).*dinheiro.*ganhar.*',
+        r'(?i).*kwai golds?.*',
     ]
 
     def buscar_e_clicar():
         for pattern in patterns:
-            print(f"Buscando elemento com texto/descrição contendo '{pattern}'...")
+            print(f"Buscando elemento com regex '{pattern}'...")
             for query in [
-                {'text': pattern},
-                {'textContains': pattern},
-                {'description': pattern},
-                {'descriptionContains': pattern},
+                {'textMatches': pattern},
+                {'descriptionMatches': pattern},
+                {'textContains': 'Ganhar dinheiro'},
+                {'descriptionContains': 'Ganhar dinheiro'},
             ]:
                 elem = d(**query)
                 if elem.exists:
                     print(f"Encontrado elemento por {query}")
-                    _clicar_elemento(elem)
-                    return True
-
-        if hasattr(d, 'xpath'):
-            print("Tentando busca XPath por 'Ganhar'.")
-            xpath = "//*[contains(@text, 'Ganhar') or contains(@content-desc, 'Ganhar') or contains(@text, 'ganhar') or contains(@content-desc, 'ganhar')]"
-            elems = d.xpath(xpath)
-            if elems.exists:
-                for elem in elems:
-                    print("Encontrado elemento via XPath com 'Ganhar'")
                     _clicar_elemento(elem)
                     return True
         return False
@@ -188,13 +179,44 @@ def clicar_ganhar_dinheiro():
     if buscar_e_clicar():
         return
 
-    print("Não encontrou sem scroll. Rolando a tela para baixo e tentando novamente...")
-    for attempt in range(1, 5):
-        scroll_down(retries=1)
-        print(f"Pesquisa após scroll {attempt}/4")
-        if buscar_e_clicar():
+    print("Não encontrou o botão 'Ganhar dinheiro' diretamente. Tentando busca alternativa por ambos 'ganhar' e 'dinheiro'...")
+    alt_xpath = (
+        "//*[ (contains(@text,'Ganhar') and contains(@text,'dinheiro')) "
+        "or (contains(@text,'dinheiro') and contains(@text,'Ganhar')) "
+        "or (contains(@content-desc,'Ganhar') and contains(@content-desc,'dinheiro')) "
+        "or (contains(@content-desc,'dinheiro') and contains(@content-desc,'Ganhar')) ]"
+    )
+    try:
+        elems = d.xpath(alt_xpath)
+        if elems.exists:
+            for elem in elems:
+                print("Encontrado elemento via XPath com 'Ganhar' e 'dinheiro'")
+                _clicar_elemento(elem)
+                return True
+    except Exception as exc:
+        print(f"XPath falhou: {exc}")
+
+    print("Não encontrou o botão com texto completo. Procurando candidatos mais amplos, mas evitando falsos positivos...")
+    broader = [
+        {'textContains': 'Ganhar'},
+        {'descriptionContains': 'Ganhar'},
+        {'textContains': 'dinheiro'},
+        {'descriptionContains': 'dinheiro'},
+    ]
+    bad_terms = ['jogo', 'jogos', 'game', 'games', 'play', 'jogar', 'assistir', 'video']
+    for query in broader:
+        elem = d(**query)
+        if elem.exists:
+            info = elem.info
+            text = ((info.get('text') or '') + ' ' + (info.get('description') or '')).strip()
+            if any(bad in text.lower() for bad in bad_terms):
+                print(f"Ignorando candidato com texto: {text}")
+                continue
+            print(f"Clicando candidato amplo: {text}")
+            _clicar_elemento(elem)
             return
 
+    print("Não foi possível localizar um elemento de 'Ganhar dinheiro' diretamente. Verifique se o menu abriu corretamente.")
     raise RuntimeError("Não foi possível clicar no ícone 'Ganhar dinheiro' após scroll")
 
 
@@ -238,29 +260,183 @@ def scroll_down(retries=5):
 
 
 def clicar_assista_videos():
-    """Rola a tela e clica no card 'Asista a vídeos para ganhar X kwai golds'."""
-    print("Procurando o card 'Asista a vídeos para ganhar X kwai golds'...")
+    """Rola a tela e clica no card de recompensa de vídeos com botão 'Ir'."""
+    print("Procurando o card 'Assistir vídeos para ganhar até ...'...")
     patterns = [
-        'Asista a vídeos para ganhar',
-        'Asista a vídeo para ganhar',
-        'kwai golds',
-        'kwai gold',
-        'ganhar',
+        r'(?i).*assistir v[ií]deos para ganhar.*até.*',
+        r'(?i).*assistir v[ií]deos para ganhar.*',
+        r'(?i).*assista.*v[ií]deos para ganhar.*',
+        r'(?i).*assistir v[ií]deos.*ganhar.*',
+        r'(?i).*v[ií]deos para ganhar.*',
     ]
 
     for attempt in range(6):
-        for pattern in patterns:
-            elem = d(textContains=pattern)
-            if elem.exists:
-                print(f"Encontrado elemento com texto '{pattern}'")
-                elem.click()
-                time.sleep(4)
+        card_elem = _find_card_by_regex(patterns)
+        if card_elem is not None:
+            print("Encontrado card principal com o texto correto.")
+            if _clicar_ir_relacionado(card_elem):
                 return
+            print("Não conseguiu clicar diretamente no botão 'Ir' relacionado. Tentando clicar no próprio card.")
+            try:
+                _clicar_elemento(card_elem)
+                return
+            except Exception as exc:
+                print(f"Falha ao clicar no card principal: {exc}")
 
-        print(f"Não encontrado ainda. Rolando a tela ({attempt + 1}/6)...")
+        print(f"Card não encontrado. Rolando a tela ({attempt + 1}/6)...")
         scroll_down(retries=1)
 
-    raise RuntimeError("Não foi possível encontrar o card 'Asista a vídeos para ganhar X kwai golds'")
+    raise RuntimeError("Não foi possível encontrar o card 'Assista a vídeos para ganhar...' após scroll")
+
+
+def _find_card_by_regex(patterns):
+    for pattern in patterns:
+        print(f"Buscando card com regex '{pattern}'...")
+        for selector_type in ['textMatches', 'descriptionMatches']:
+            query = {selector_type: pattern}
+            elem = d(**query)
+            if elem.exists:
+                print(f"Encontrado card por {selector_type}")
+                return elem
+    return None
+
+
+def _clicar_ir_relacionado(card_elem):
+    if not card_elem.exists:
+        return False
+
+    info = card_elem.info
+    bounds = info.get('bounds') or info.get('visibleBounds') or {}
+    if not bounds or not all(k in bounds for k in ('left', 'top', 'right', 'bottom')):
+        return False
+
+    mid_y = (bounds['top'] + bounds['bottom']) // 2
+    candidates = [
+        {'text': 'Ir'},
+        {'textMatches': r'(?i)^ir$'},
+        {'description': 'Ir'},
+        {'descriptionMatches': r'(?i)^ir$'},
+    ]
+
+    for query in candidates:
+        cand = d(**query)
+        if cand.exists:
+            try:
+                cand_info = cand.info
+                cand_bounds = cand_info.get('bounds') or cand_info.get('visibleBounds') or {}
+                if all(k in cand_bounds for k in ('left', 'top', 'right', 'bottom')):
+                    cand_mid_y = (cand_bounds['top'] + cand_bounds['bottom']) // 2
+                    if abs(cand_mid_y - mid_y) <= max((bounds['bottom'] - bounds['top']) * 2, 200):
+                        print(f"Clicando botão 'Ir' próximo ao card usando {query}.")
+                        _clicar_elemento(cand)
+                        return True
+                else:
+                    print(f"Clicando botão 'Ir' sem bounds específicos usando {query}.")
+                    _clicar_elemento(cand)
+                    return True
+            except Exception as exc:
+                print(f"Falha ao avaliar candidato 'Ir': {exc}")
+                continue
+
+    print("Não encontrou botão 'Ir' próximo ao card. Tentando fallback na área do card.")
+    try:
+        x = bounds['right'] - max(20, (bounds['right'] - bounds['left']) // 6)
+        y = mid_y
+        print(f"Tentativa de clique na área direita do card em {x},{y}.")
+        d.click(x, y)
+        time.sleep(4)
+        return True
+    except Exception as exc:
+        print(f"Falha no fallback do card: {exc}")
+        return False
+
+
+def aguardar_e_fechar_video(max_espera_por_video=120):
+    """Loop: espera timer zerar → clica 'Ganhar mais' → repete."""
+    videos_assistidos = 0
+
+    while True:
+        print(f"Aguardando fim do timer do vídeo {videos_assistidos + 1}...")
+
+        # Passo 1: aguarda o timer chegar a 0
+        if not _aguardar_timer_acabar(max_espera_por_video):
+            print("Timer não terminou no tempo esperado. Parando.")
+            return
+
+        videos_assistidos += 1
+        print(f"Vídeo #{videos_assistidos} finalizado!")
+        time.sleep(2)
+
+        # Passo 2: verifica se apareceu "Ganhar mais"
+        if _clicar_ganhar_mais():
+            print("Clicou em 'Ganhar mais'. Próximo vídeo em breve...")
+            time.sleep(4)
+        else:
+            print("'Ganhar mais' não apareceu. Parando de assistir vídeos.")
+            return
+
+
+def _aguardar_timer_acabar(max_espera):
+    """Lê o timer do vídeo (formato: '15s Seja recompensado após') e aguarda até zerar."""
+    inicio = time.time()
+    ultimo_timer = None
+
+    while time.time() - inicio < max_espera:
+        try:
+            xml = d.dump_hierarchy()
+            root = ET.fromstring(xml)
+
+            timer_agora = None
+            # Procura por padrão: "15s Seja recompensado após"
+            for node in root.iter():
+                text = node.attrib.get('text', '').strip()
+                match = re.search(r'(\d+)s\s+Seja recompensado', text)
+                if match:
+                    timer_agora = int(match.group(1))
+                    break
+
+            if timer_agora is not None:
+                if ultimo_timer != timer_agora:
+                    print(f"⏱️  Timer: {timer_agora}s")
+                    ultimo_timer = timer_agora
+
+                if timer_agora == 0:
+                    print("⏱️  Timer zerou! Vídeo acabou.")
+                    return True
+            else:
+                # Timer desapareceu - significa que acabou
+                if ultimo_timer is not None:
+                    print("⏱️  Timer desapareceu - Vídeo finalizado!")
+                    return True
+
+        except Exception as e:
+            print(f"Erro ao ler timer: {e}")
+
+        time.sleep(2)
+
+    print(f"Timeout de {max_espera}s aguardando timer")
+    return False
+
+
+def _clicar_ganhar_mais(timeout=15):
+    """Aguarda e clica em 'Ganhar mais'. Retorna False se não aparecer."""
+    inicio = time.time()
+    while time.time() - inicio < timeout:
+        for sel in [{'text': 'Ganhar mais'}, {'descriptionContains': 'Ganhar mais'}, {'textContains': 'Ganhar mais'}]:
+            elem = d(**sel)
+            if elem.exists:
+                print("'Ganhar mais' encontrado. Tocando via adb...")
+                try:
+                    info = elem.info
+                    bounds = info.get('bounds') or info.get('visibleBounds', {})
+                    x = (bounds['left'] + bounds['right']) // 2
+                    y = (bounds['top'] + bounds['bottom']) // 2
+                    subprocess.run(["adb", "-s", DEVICE_ID, "shell", "input", "tap", str(x), str(y)], check=True)
+                except Exception as e:
+                    print(f"Erro ao tocar 'Ganhar mais': {e}")
+                return True
+        time.sleep(1)
+    return False
 
 
 if __name__ == "__main__":
@@ -270,3 +446,4 @@ if __name__ == "__main__":
     clicar_menu_tres_pontos()
     clicar_ganhar_dinheiro()
     clicar_assista_videos()
+    aguardar_e_fechar_video()
