@@ -4,29 +4,45 @@ import subprocess
 import xml.etree.ElementTree as ET
 import re
 
-DEVICE_ID = "ZF525J6NKX"
+DEVICE_ID = None
 KWAI_PACKAGE = "com.kwai.video"
 
 d = None
 
 
-def conectar_dispositivo(retries=3, delay=5):
-    global d
-    for attempt in range(1, retries + 1):
-        result = subprocess.run(["adb", "devices"], capture_output=True, text=True)
-        if DEVICE_ID in result.stdout and "offline" not in result.stdout:
-            print(f"Dispositivo {DEVICE_ID} detectado. Conectando...")
-            d = u2.connect(DEVICE_ID)
-            print("Conectado com sucesso.")
-            return
-        print(f"[{attempt}/{retries}] Dispositivo {DEVICE_ID} não encontrado. Aguardando {delay}s...")
-        print("Dispositivos ADB disponíveis:")
-        print(result.stdout.strip() or "  (nenhum)")
-        time.sleep(delay)
-    raise RuntimeError(
-        f"Dispositivo {DEVICE_ID} não está online após {retries} tentativas.\n"
-        "Verifique: cabo USB conectado, Depuração USB ativada e autorização RSA aceita no celular."
-    )
+def _listar_dispositivos():
+    result = subprocess.run(["adb", "devices"], capture_output=True, text=True)
+    dispositivos = []
+    for line in result.stdout.splitlines()[1:]:
+        if "\tdevice" in line:
+            dispositivos.append(line.split("\t")[0].strip())
+    return dispositivos
+
+
+def conectar_dispositivo():
+    global d, DEVICE_ID
+
+    dispositivos = _listar_dispositivos()
+
+    if not dispositivos:
+        raise RuntimeError(
+            "Nenhum dispositivo encontrado.\n"
+            "Verifique: cabo USB conectado, Depuração USB ativada e autorização RSA aceita no celular."
+        )
+
+    if len(dispositivos) == 1:
+        DEVICE_ID = dispositivos[0]
+        print(f"Dispositivo detectado automaticamente: {DEVICE_ID}")
+    else:
+        print("Múltiplos dispositivos encontrados:")
+        for i, dev in enumerate(dispositivos):
+            print(f"  [{i+1}] {dev}")
+        escolha = input("Escolha o número do dispositivo: ").strip()
+        DEVICE_ID = dispositivos[int(escolha) - 1]
+        print(f"Usando dispositivo: {DEVICE_ID}")
+
+    d = u2.connect(DEVICE_ID)
+    print("Conectado com sucesso.")
 
 
 def abrir_kwai():
@@ -418,23 +434,46 @@ def _aguardar_timer_acabar(max_espera):
     return False
 
 
-def _clicar_ganhar_mais(timeout=15):
-    """Aguarda e clica em 'Ganhar mais'. Retorna False se não aparecer."""
+def _clicar_ganhar_mais(timeout=20):
+    """Aguarda 'Ganhar mais' até 20s. Se não aparecer, pressiona voltar e tenta novamente."""
+    print("Procurando por 'Ganhar mais'...")
+
+    # Primeira tentativa: procura por até 20s
+    if _procurar_e_clicar_ganhar_mais(timeout):
+        return True
+
+    # Se não encontrou, tenta pressionar voltar
+    print("'Ganhar mais' não encontrado após 20s. Tentando pressionar voltar...")
+    subprocess.run(["adb", "-s", DEVICE_ID, "shell", "input", "keyevent", "4"])  # 4 = BACK
+    time.sleep(3)
+
+    # Tenta novamente após voltar
+    print("Procurando 'Ganhar mais' novamente após voltar...")
+    if _procurar_e_clicar_ganhar_mais(timeout=5):
+        return True
+
+    print("'Ganhar mais' não encontrado mesmo após voltar. Encerrando.")
+    return False
+
+
+def _procurar_e_clicar_ganhar_mais(timeout):
+    """Procura e clica em 'Ganhar mais' dentro do timeout especificado."""
     inicio = time.time()
     while time.time() - inicio < timeout:
         for sel in [{'text': 'Ganhar mais'}, {'descriptionContains': 'Ganhar mais'}, {'textContains': 'Ganhar mais'}]:
             elem = d(**sel)
             if elem.exists:
-                print("'Ganhar mais' encontrado. Tocando via adb...")
+                print("'Ganhar mais' encontrado! Tocando via adb...")
                 try:
                     info = elem.info
                     bounds = info.get('bounds') or info.get('visibleBounds', {})
                     x = (bounds['left'] + bounds['right']) // 2
                     y = (bounds['top'] + bounds['bottom']) // 2
                     subprocess.run(["adb", "-s", DEVICE_ID, "shell", "input", "tap", str(x), str(y)], check=True)
+                    return True
                 except Exception as e:
                     print(f"Erro ao tocar 'Ganhar mais': {e}")
-                return True
+                    return False
         time.sleep(1)
     return False
 
