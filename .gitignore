@@ -1,0 +1,7 @@
+# Logs e dumps de execução do bot (gerados em runtime, não versionar)
+logs/
+venv/
+testes/
+# Python
+__pycache__/
+*.pyc

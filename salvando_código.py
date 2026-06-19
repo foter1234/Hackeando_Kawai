@@ -42,20 +42,8 @@ MAX_ESPERA_VIDEO = 180          # teto de segurança para um único vídeo (s)
 TIMEOUT_SEM_TIMER = 25          # s sem detectar timer => provável anúncio sem timer
 INTERVALO_LEITURA_TIMER = 1.5   # s entre leituras do timer
 
-# Thresholds de rendimento e troca de conta
-GOLD_BAIXO_THRESHOLD = 100       # gold/vídeo abaixo disso = "ruim" (análise de janela)
-GOLD_RIDICULO = 15               # abaixo disso = trocar conta na hora, sem esperar janela
-PAUSA_CURTA_A_CADA = 10          # pausa de 2 min a cada N vídeos assistidos
-PAUSA_CURTA_SEG = 120            # duração da pausa curta (segundos)
-VIDEOS_RUINS_NA_JANELA = 5       # X ruins nos últimos JANELA_ANALISE vídeos → trocar conta
-JANELA_ANALISE = 10              # tamanho da janela de análise de rendimento
-
 DEVICE_ID = None
 d = None
-
-_historico_gold = []             # histórico dos últimos ganhos em gold
-_streak_ruim = 0                 # contador auxiliar para logging
-_conta_atual = 0                 # índice da conta em uso (0 = primeira, 1 = segunda)
 
 # ---------------------------------------------------------------------------
 # Logging para estudo: toda a saída (prints + erros) vai para um arquivo por
@@ -988,12 +976,9 @@ def lidar_pos_video():
       (b) modal 'Ganhar mais' + 'Sair' → clicar 'Ganhar mais' (próximo vídeo auto-inicia).
       (c) voltou direto para a lista → nada a fazer, loop reabre o card.
       (d) transição em curso → aguarda e tenta novamente.
-
-    Retorna o gold ganho neste vídeo (int) ou None se não foi detectado na tela.
     """
     voltar("encerrar vídeo")
     time.sleep(2)
-    gold_ganho = None
 
     for tentativa in range(5):
         # Salva dump apenas na 1ª e na última tentativa para não criar centenas de arquivos
@@ -1002,46 +987,27 @@ def lidar_pos_video():
 
         # (a) tela de recompensa-AD — detectar E tratar antes de qualquer outra coisa
         if _eh_tela_recompensa_ad(tela):
-            gold_ganho = _extrair_gold_tela(tela)
-            if gold_ganho is not None:
-                print(f"[OURO] +{gold_ganho} Kwai Golds neste vídeo.")
             print(f"[PÓS-VÍDEO] Tela de recompensa-AD detectada (tentativa {tentativa+1}).")
             _dispensar_tela_recompensa_ad(tela)
             relatorio("Pós-vídeo: recompensa-AD dispensada",
-                      ["'Sair'+'Kwai Golds obtidas' → coletou e saiu",
-                       f"gold extraído: {gold_ganho}"])
-            return gold_ganho
+                      ["'Sair'+'Kwai Golds obtidas' → coletou e saiu"])
+            return
 
         # (b) modal 'Ganhar mais' + 'Sair'
         gm = tela.por_texto_exato('Ganhar mais')
         sair = tela.por_texto_exato('Sair')
         if gm and sair:
-            gold_ganho = _extrair_gold_tela(tela)
-            if gold_ganho is not None:
-                print(f"[OURO] +{gold_ganho} Kwai Golds neste vídeo.")
-            # Gold ridículo → NÃO clicar "Ganhar mais" (próximo vídeo pagaria igual)
-            # Clicar Sair e deixar o loop decidir trocar de conta
-            if gold_ganho is not None and gold_ganho < GOLD_RIDICULO:
-                print(f"[OURO] {gold_ganho} gold é ridículo — clicando Sair (trocar conta).")
-                relatorio("Modal pós-vídeo — gold ridículo", [
-                    f"gold: {gold_ganho} < {GOLD_RIDICULO}",
-                    "ação: Sair em vez de Ganhar mais",
-                ])
-                clicar_alvo(tela, sair[0], "Sair (gold ridículo)")
-                time.sleep(3)
-                return gold_ganho
             print("✅ Modal 'Ganhar mais' + 'Sair' → clicando em 'Ganhar mais'.")
-            relatorio("Modal pós-vídeo", ["'Ganhar mais'+'Sair' → clicou 'Ganhar mais'",
-                                          f"gold extraído: {gold_ganho}"])
+            relatorio("Modal pós-vídeo", ["'Ganhar mais'+'Sair' → clicou 'Ganhar mais'"])
             clicar_alvo(tela, gm[0], "clicar 'Ganhar mais'")
             time.sleep(4)
-            return gold_ganho
+            return
 
         # (c) card visível — voltou direto para a lista
         if achar_card(tela):
             print("Voltou direto para a lista de cards.")
             relatorio("Pós-vídeo", ["voltou para lista de cards"])
-            return gold_ganho
+            return
 
         # (d) ainda transicionando — aguarda
         print(f"[PÓS-VÍDEO] Aguardando transição (tentativa {tentativa+1}/5)...")
@@ -1049,230 +1015,6 @@ def lidar_pos_video():
 
     print("Pós-vídeo: estado não identificado; o loop vai tentar reabrir o card.")
     relatorio("Pós-vídeo indefinido", ["loop reabrirá o card"])
-    return gold_ganho
-
-
-# ---------------------------------------------------------------------------
-# DETECÇÃO DE RENDIMENTO, PAUSA CURTA E TROCA DE CONTA
-# ---------------------------------------------------------------------------
-def _extrair_gold_tela(tela):
-    """Extrai a quantidade de Kwai Golds ganha de uma tela pós-vídeo.
-
-    Procura padrões como '+150 Kwai Golds', 'Kwai Golds obtidas: 150', etc.
-    Retorna int ou None se não encontrou.
-    """
-    for e in tela.com_texto():
-        c = e.conteudo
-        m = re.search(r'\+?\s*(\d[\d.]*)\s*(?:kwai\s*gold|kwai\s*coin|\bkg\b)', c, re.IGNORECASE)
-        if m:
-            try:
-                return int(re.sub(r'[.]', '', m.group(1)))
-            except ValueError:
-                pass
-        m = re.search(r'(?:receba|ganhou|obteve|recebeu|coletou)\s+\+?\s*(\d+)', c, re.IGNORECASE)
-        if m:
-            try:
-                v = int(m.group(1))
-                if 1 <= v <= 500000:
-                    return v
-            except ValueError:
-                pass
-    return None
-
-
-def _registrar_gold(gold, n_video):
-    """Registra o gold ganho e analisa a janela dos últimos JANELA_ANALISE vídeos.
-
-    Retorna 'trocar' se >= VIDEOS_RUINS_NA_JANELA dos últimos JANELA_ANALISE vídeos
-    pagaram abaixo de GOLD_BAIXO_THRESHOLD. Retorna None caso contrário.
-    """
-    global _streak_ruim
-    _historico_gold.append(gold)
-    if len(_historico_gold) > 20:
-        _historico_gold.pop(0)
-
-    if gold < GOLD_BAIXO_THRESHOLD:
-        _streak_ruim += 1
-        status = f"BAIXO (streak {_streak_ruim})"
-    else:
-        _streak_ruim = 0
-        status = "OK"
-
-    janela = _historico_gold[-JANELA_ANALISE:]
-    ruins = sum(1 for g in janela if g < GOLD_BAIXO_THRESHOLD)
-    media5 = sum(_historico_gold[-5:]) // min(len(_historico_gold), 5) if _historico_gold else 0
-
-    print(f"[RENDIMENTO] #{n_video}: {gold} gold ({status}) | média-5: {media5} | ruins/{JANELA_ANALISE}: {ruins}/{VIDEOS_RUINS_NA_JANELA}")
-    relatorio(f"Rendimento #{n_video}", [
-        f"gold: {gold}", f"status: {status}", f"média-5: {media5}",
-        f"ruins nos últimos {len(janela)}: {ruins}/{VIDEOS_RUINS_NA_JANELA}",
-    ])
-
-    if len(janela) >= JANELA_ANALISE and ruins >= VIDEOS_RUINS_NA_JANELA:
-        return 'trocar'
-    return None
-
-
-def _pausa_curta():
-    """Pausa de PAUSA_CURTA_SEG segundos a cada PAUSA_CURTA_A_CADA vídeos.
-
-    Minimiza o Kwai, espera e volta ao fluxo. Dá tempo para o algoritmo
-    do Kwai 'respirar' antes de continuar acumulando vídeos.
-    """
-    print(f"\n[PAUSA] {PAUSA_CURTA_A_CADA} vídeos assistidos — pausa de {PAUSA_CURTA_SEG}s (anti-shadow)...")
-    relatorio("Pausa curta", [f"{PAUSA_CURTA_SEG}s a cada {PAUSA_CURTA_A_CADA} vídeos"])
-    try:
-        d.press("home")
-    except Exception:
-        pass
-    time.sleep(PAUSA_CURTA_SEG)
-    print("[PAUSA] Retomando — reabrindo Kwai...")
-    abrir_kwai()
-    ir_para_perfil()
-    abrir_menu_3pontos()
-    clicar_ganhar_dinheiro()
-
-
-def _selecionar_outra_conta(tela_seletor):
-    """Após abrir o seletor de contas, clica na conta diferente da atual.
-
-    Salva dump para calibração futura. Usa heurísticas progressivas para
-    identificar qual elemento representa a outra conta disponível.
-    Retorna True se clicou em algo plausível.
-    """
-    _salvar_xml(d.dump_hierarchy(), "seletor_contas")
-    logar_tela(tela_seletor, "seletor_contas")
-
-    REJEITAR = re.compile(
-        r'adicionar|add\s*account|new\s*account|nova\s*conta|\bsair\b|\bfechar\b|\bcancel',
-        re.IGNORECASE
-    )
-
-    # Contas com username (@) ou padrão "conta N"
-    contas = []
-    for e in tela_seletor.com_texto():
-        if REJEITAR.search(e.conteudo):
-            continue
-        if '@' in e.conteudo or re.search(r'conta\s*\d|account', e.conteudo, re.IGNORECASE):
-            dono = e if e.clickable else tela_seletor.clicavel_que_contem(e)
-            if dono:
-                contas.append(dono)
-
-    # Fallback: elementos clicáveis médios na parte central (lista de contas)
-    if not contas:
-        alt = [e for e in tela_seletor.elementos
-               if e.clickable
-               and tela_seletor.altura * 0.15 < e.cy < tela_seletor.altura * 0.85
-               and e.w > tela_seletor.largura * 0.25
-               and not REJEITAR.search(e.conteudo)]
-        alt.sort(key=lambda e: e.cy)
-        # Segunda da lista (a primeira geralmente é a conta atual já selecionada)
-        contas = [alt[1]] if len(alt) >= 2 else ([alt[0]] if alt else [])
-
-    if contas:
-        alvo = contas[0]
-        print(f"[CONTA] Selecionando: {alvo!r}")
-        relatorio("Conta selecionada", [f"{alvo!r}"])
-        clicar_alvo(tela_seletor, alvo, "selecionar outra conta")
-        time.sleep(5)
-        capturar_tela("apos_trocar_conta")
-        return True
-
-    print("[CONTA] Seletor de contas não identificado — ver dump 'seletor_contas' para calibrar.")
-    relatorio("Troca de conta falhou", ["seletor não identificado; dump salvo para calibração"])
-    return False
-
-
-def _finalizar_pos_troca():
-    """Após trocar (ou tentar), navega de volta para 'Ganhar dinheiro'."""
-    print("[CONTA] Navegando de volta para 'Ganhar dinheiro'...")
-    abrir_kwai()
-    ir_para_perfil()
-    abrir_menu_3pontos()
-    clicar_ganhar_dinheiro()
-
-
-def trocar_conta():
-    """Troca para a outra conta do Kwai e retoma o fluxo de 'Ganhar dinheiro'.
-
-    Reseta o histórico de gold (a nova conta tem limite próprio).
-    Estratégias em ordem de tentativa:
-      1. Procurar 'Trocar conta' diretamente na tela do Perfil
-      2. Abrir menu ⋯ e procurar 'Trocar conta' lá
-      3. Tap no avatar/nome no topo do perfil (abre seletor em alguns apps)
-    Em qualquer caso, ao final navega de volta ao farm.
-    """
-    global _conta_atual, _historico_gold, _streak_ruim
-
-    nova = 1 - _conta_atual
-    print(f"\n{'='*60}")
-    print(f"[CONTA] Trocando conta {_conta_atual} → {nova}")
-    print(f"[CONTA] Histórico recente: {_historico_gold[-10:]}")
-    print(f"{'='*60}")
-    relatorio("Troca de conta", [
-        f"conta {_conta_atual} → {nova}",
-        f"histórico: {_historico_gold[-10:]}",
-    ])
-
-    _historico_gold.clear()
-    _streak_ruim = 0
-
-    ir_para_perfil()
-    time.sleep(1)
-
-    PADROES_TROCA = [
-        r'trocar\s+conta',
-        r'switch\s+account',
-        r'mudar\s+conta',
-        r'change\s+account',
-    ]
-
-    def _tentar_abrir_seletor(tela_atual):
-        for pattern in PADROES_TROCA:
-            hits = tela_atual.por_regex(pattern)
-            if hits:
-                clicar_alvo(tela_atual, hits[0], f"trocar conta ({pattern})")
-                time.sleep(3)
-                ts = capturar_tela("pos_trocar_btn")
-                return _selecionar_outra_conta(ts)
-        return False
-
-    # Estratégia 1: direto na tela do perfil
-    tela = capturar_tela("perfil_trocar_conta")
-    if _tentar_abrir_seletor(tela):
-        _conta_atual = nova
-        _finalizar_pos_troca()
-        return True
-
-    # Estratégia 2: menu 3 pontos
-    abrir_menu_3pontos()
-    tela_menu = capturar_tela("menu_trocar_conta")
-    if _tentar_abrir_seletor(tela_menu):
-        _conta_atual = nova
-        _finalizar_pos_troca()
-        return True
-
-    # Estratégia 3: tap no avatar/nome no topo do perfil
-    voltar("fechar menu (fallback trocar conta)")
-    time.sleep(1)
-    tela = capturar_tela("perfil_fallback_conta")
-    candidatos = [e for e in tela.elementos
-                  if e.clickable and e.cy < tela.altura * 0.35
-                  and re.search(r'avatar|photo|profile|name|user', e.rid.lower() + e.desc.lower())]
-    if candidatos:
-        candidatos.sort(key=lambda e: e.cy)
-        clicar_alvo(tela, candidatos[0], "tap avatar para abrir seletor de contas")
-        time.sleep(3)
-        ts = capturar_tela("pos_tap_avatar")
-        if _selecionar_outra_conta(ts):
-            _conta_atual = nova
-            _finalizar_pos_troca()
-            return True
-
-    print("[CONTA] Não foi possível trocar de conta — continuando na conta atual.")
-    relatorio("Troca de conta não executada", ["nenhuma estratégia funcionou; ver dumps"])
-    _finalizar_pos_troca()
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -1313,28 +1055,7 @@ def loop_assistir_videos():
 
         # Timer terminou normalmente -> espera 5–10s, volta e trata modal
         esperar_pos_timer()
-        gold = lidar_pos_video()
-
-        # Rastrear rendimento e agir conforme resultado
-        trocou_conta = False
-        if gold is not None:
-            if gold < GOLD_RIDICULO:
-                # Um único vídeo com gold ridículo → trocar imediatamente
-                print(f"[CONTA] Gold ridículo ({gold}) → trocando de conta agora.")
-                relatorio("Troca imediata", [f"gold ridículo: {gold} < {GOLD_RIDICULO}"])
-                trocar_conta()
-                trocou_conta = True
-            else:
-                if _registrar_gold(gold, n) == 'trocar':
-                    # Janela de análise: 5+ ruins nos últimos 10 → trocar
-                    trocar_conta()
-                    trocou_conta = True
-        else:
-            print(f"[RENDIMENTO] Gold do vídeo #{n} não detectado — monitoramento pulado.")
-
-        # Pausa curta a cada PAUSA_CURTA_A_CADA vídeos (não aplica se já trocou conta)
-        if not trocou_conta and n % PAUSA_CURTA_A_CADA == 0:
-            _pausa_curta()
+        lidar_pos_video()
 
 
 if __name__ == "__main__":
